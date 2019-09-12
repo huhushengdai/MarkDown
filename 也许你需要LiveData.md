@@ -1,4 +1,15 @@
-## 简单介绍下LiveData
+## 也许你需要LiveData
+
+——有没有觉得子线程做数据处理，然后切换主线程做UI更新很麻烦？
+
+——有没有activity、fragment生命周期在destroy之后，子线程才处理完数据的情况？此时多一个判断，根据生命周期情况来更新UI，不过分吧？
+
+——听说你用了RxJava，既优雅的处理了线程切换问题，又解决了生命周期问题，那么有没有觉得每次都自己绑定RxJava生命周期很麻烦？业务代码和View显示代码有没有因为被耦合到一起了？
+
+……
+
+或许还有很多开发的问题，虽然不难解决，但是很繁琐。**这种时候不妨试试LiveData**。
+*(PS.别问LiveData是什么，问就只能往下看)*
 
 引子——
 
@@ -52,9 +63,11 @@ public class HttpUtils {
 
 **虽然看起来很容易造成内存泄漏，但实际影响可能并没有想象中的大：一个原因是当子线程执行完之后，会释放callBack对象，也就是释放了activity的引用，使得activity也可以被gc回收了（当然如果因为某些原因，线程没有执行完，会导致activity一直得不到释放）；另一个原因是activity对象，不会在短时间内，被大量创建**
 
-但是，问题存在，而不去解决，最后必然会爆发的，当然，更关键的是，如果不去解决，怎么引出本文要介绍的LiveData呢？
+这只是一般情况，如果子线程阻塞了，怎么办？或者获取数据回调时，activity、fragment生命周期已经destroy了，怎么办？
 
-先来看看使用LIveData是什么情况，再看看LiveData是如何避免内存泄漏的：
+LiveData，就是来解决这些问题的。
+
+先来看看使用LIveData是什么情况，再看看LiveData是如何避免这些情况发生：
 
 ```
 public class HttpActivity extends AppCompatActivity {
@@ -118,7 +131,7 @@ public class HttpUtils {
 
 很方便吧，不用顾虑内存泄漏问题，当然，这仅仅是其中一点，还有其他方便的地方
 
-LiveData的优点：
+接下来就介绍一下LiveData的几个优点：
 
 **1.避免内存泄漏**
 
@@ -216,14 +229,43 @@ public LiveData<User> getUser(){
 }
 ```
 
-LiveData的优点和基本用法，已经大致说完了，想在文章的最后，简单聊聊LiveData的设计。
+LiveData的优点和基本用法，已经大致说完了，是否觉得非常简短？越是精简，越是显得Google的牛逼，把具体实现都隐藏了，提供了非常简单的使用方法，让开发者把精力集中在具体业务开发上，完美诠释了开闭原则。Google如此厉害的操作，深深值得我们学习，所以接下来就再聊聊LiveData的设计和实现。
 
 **LiveData的设计中心思想很简单，主要就是使用观察者模式。**
 
-observe观察LiveData的数据变化；
+observe观察LiveData的数据变化，LiveData数据发生变化，就通知给observe；
 
-LiveData去观察LifecycleOwner的生命周期变化；
+LiveData去观察LifecycleOwner的生命周期变化，当生命周期到DESTROYED时，移除observe；
 
-通过针对不同的生命周期，使用不同的策略去通知observe数据变化。
+```
+//LiveData observe 方法
+public void observe(@NonNull LifecycleOwner owner, @NonNull Observer<T> observer) {
+    if (owner.getLifecycle().getCurrentState() == DESTROYED) {
+        // ignore
+        //生命周期已经结束，不需要添加进去
+        return;
+    }
+    LifecycleBoundObserver  wrapper = new LifecycleBoundObserver(owner, observer);
+    //mObservers 是一个map集合，这里用来存放observer这个观察者
+    //当LiveData数据有变化时，就会遍历mObservers，通知observer
+    ObserverWrapper existing = mObservers .putIfAbsent(observer, wrapper);
+    //一个observer只能被加入到一个LifecycleOwner中
+    if (existing != null && !existing.isAttachedTo(owner)) {
+        throw new IllegalArgumentException("Cannot add the same observer"
+                + " with different lifecycles");
+    }
+    if (existing != null) {
+        return;
+    }
+    //加入LifecycleOwner的观察队列
+    //当生命周期到DESTROYED时，LifecycleBoundObserver会把自身从mObservers集合中移除
+    owner.getLifecycle().addObserver(wrapper);
+}
+```
 
-简单明了，over。
+LiveData的介绍到这里结束了，记住LiveData的两个特点，会在开发中最常用到的：
+**1.自动切换到主线程**
+
+**2.跟生命周期绑定，自动解绑，不需要开发者做解绑处理（也就是不用担心内存泄漏）**
+
+LiveData优点有很多，可以解决很多开发遇到的问题。如果配合Google推出的另一个亲儿子ViewModel，会解决更多问题，想知道更多，更具体的么？——Coming soon
